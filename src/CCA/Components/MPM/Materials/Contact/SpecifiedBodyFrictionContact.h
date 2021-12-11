@@ -22,10 +22,10 @@
  * IN THE SOFTWARE.
  */
 
-// SpecifiedBody.h
+// SpecifiedBodyFrictionContact.h
 
-#ifndef __SPECIFIED_BODY_H_
-#define __SPECIFIED_BODY_H_
+#ifndef __SPECIFIED_BODY_FRICTION_H_
+#define __SPECIFIED_BODY_FRICTION_H_
 
 #include <Core/Geometry/Vector.h>
 #include <CCA/Components/MPM/Materials/Contact/Contact.h>
@@ -47,23 +47,19 @@ namespace Uintah {
   /**************************************
 
 CLASS
-   SpecifiedBodyContact
+   SpecifiedBodyFrictionContact
    
    Short description...
 
 GENERAL INFORMATION
 
-   SpecifiedBodyContact.h
+   SpecifiedBodyFrictionContact.h
 
-   Andrew Brydon 
-   andrew@lanl.gov
+   Jim Guilkey
+   Department of Mechanical Engineering 
+   University of Utah
 
-   based on RigidBodyContact.
-     Jim Guilkey
-     Department of Mechanical Engineering 
-     University of Utah
-
-     Center for the Simulation of Accidental Fires and Explosions (C-SAFE)
+   Center for the Simulation of Accidental Fires and Explosions (C-SAFE)
   
 
 KEYWORDS
@@ -71,14 +67,15 @@ KEYWORDS
 
 DESCRIPTION
   One of the derived Contact classes.  Allow motion of a body 
-  to be specified by an input file.
+  to be specified by an input file, while allowing for frictional
+  sliding with other materials.
 
   the format of the input is 
   <contact>
-    <type>specified</type>
+    <type>specified_friction</type>
     <filename>fname.txt</filename>
-    <direction>[1,1,1]</direction>
-    <material>0</material> 
+    <master_material>0</master_material> 
+    <mu>0.1</mu> 
   </contact>
 
   where filename points to an existing test file (which much exist from all 
@@ -97,57 +94,35 @@ DESCRIPTION
   
   There are two alternate formats (which exist for compatability with RigidBodyContact)
 
-  <contact>
-    <direction>[0,0,1]</direction>
-  </contact>
-
-  Apply center-of-mass velocity to objects in contact with material (default of 0 assumed).
-  
-
-  <contact>
-    <direction>[1,1,1]</direction>
-    <stop_time>2.0</stop_time>
-    <velocity_after_stop>[0,1,0]</velocity_after_stop>
-  <contact>
-
   when t>stop_time, impose velocity_after_stop.
   This can be combined with either rigid velocity (as shown) or a velocity profile to 
   produce wild and wacky results. 
 
   the velocity_after_stop is optional, with default (0,0,0).
 
-  
-  Notes: (Probably out of date - Jim ??)
-     
-     Contact conditions are specified in two stages, and deal with 4 velocity fields
-     
-     v^k        velocity at start of exMomInterpolated
-     v*^k       velocity coming out of exMomInterpolated (with rigid cells set)
-     v^k+1      velocity coming in to exMomIntegrated
-     v*^k+1     velocity coming out of exMomIntegrated (with rigid cells set)
-
   ****************************************/
   
-  class SpecifiedBodyContact : public Contact {
+  class SpecifiedBodyFrictionContact : public Contact {
   private:
          
     // Prevent copying of this class
     // copy constructor
-    SpecifiedBodyContact(const SpecifiedBodyContact &con);
-    SpecifiedBodyContact& operator=(const SpecifiedBodyContact &con);
+    SpecifiedBodyFrictionContact(const SpecifiedBodyFrictionContact &con);
+    SpecifiedBodyFrictionContact& operator=(const SpecifiedBodyFrictionContact &con);
          
+    Vector findVelFromProfile(double t) const;
     Vector findValFromProfile(double t, 
                         std::vector< std::pair<double, Vector> > profile) const;
     
     MaterialManagerP d_materialManager;
     double    d_stop_time;
-    double    d_vol_const;
     Vector    d_vel_after_stop;
     int       d_material;
     int       NGP;
     int       NGN;
     bool      d_NormalOnly;
     bool      d_includeRotation;
+    double    d_mu;
     std::string    d_filename;
     IntVector d_direction;
     std::vector< std::pair<double, Vector> > d_vel_profile;
@@ -159,11 +134,11 @@ DESCRIPTION
     
   public:
     // Constructor
-    SpecifiedBodyContact(const ProcessorGroup* myworld,
-                         ProblemSpecP& ps,MaterialManagerP& d_sS,MPMLabel* lb,MPMFlags*flag);
+    SpecifiedBodyFrictionContact(const ProcessorGroup* myworld,
+            ProblemSpecP& ps,MaterialManagerP& d_sS,MPMLabel* lb,MPMFlags*flag);
          
     // Destructor
-    virtual ~SpecifiedBodyContact();
+    virtual ~SpecifiedBodyFrictionContact();
 
     virtual void outputProblemSpec(ProblemSpecP& ps);
 
@@ -191,4 +166,4 @@ DESCRIPTION
       
 } // end namespace Uintah
 
-#endif /* __SPECIFIED_BODY_H_ */
+#endif /* __SPECIFIED_BODY_FRICTION_H_ */

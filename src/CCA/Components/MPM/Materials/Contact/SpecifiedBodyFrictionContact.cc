@@ -22,8 +22,8 @@
  * IN THE SOFTWARE.
  */
 
-// SpecifiedBodyContact.cc
-#include <CCA/Components/MPM/Materials/Contact/SpecifiedBodyContact.h>
+// SpecifiedBodyFrictionContact.cc
+#include <CCA/Components/MPM/Materials/Contact/SpecifiedBodyFrictionContact.h>
 #include <CCA/Components/MPM/Core/MPMFlags.h>
 #include <CCA/Ports/DataWarehouse.h>
 #include <CCA/Ports/Output.h>
@@ -50,7 +50,7 @@ using std::cerr;
 using namespace std;
 using namespace Uintah;
 
-SpecifiedBodyContact::SpecifiedBodyContact(const ProcessorGroup* myworld,
+SpecifiedBodyFrictionContact::SpecifiedBodyFrictionContact(const ProcessorGroup* myworld,
                                            ProblemSpecP& ps,
                                            MaterialManagerP& d_sS, 
                                            MPMLabel* Mlb, MPMFlags* MFlag)
@@ -59,6 +59,7 @@ SpecifiedBodyContact::SpecifiedBodyContact(const ProcessorGroup* myworld,
   // Constructor
   // read a list of values from a file
   ps->get("filename", d_filename);
+  ps->require("mu",d_mu);
 
   IntVector defaultDir(0,0,1);
   ps->getWithDefault("direction",d_direction, defaultDir);
@@ -66,12 +67,8 @@ SpecifiedBodyContact::SpecifiedBodyContact(const ProcessorGroup* myworld,
   ps->getWithDefault("master_material", d_material, 0);
   d_matls.add(d_material); // always need specified material
 
-  d_vol_const=0.;
-  ps->get("volume_constraint",d_vol_const);
-  ps->getWithDefault("normal_only", d_NormalOnly, false);
-
-  d_oneOrTwoStep = 2;
-  ps->get("OneOrTwoStep",     d_oneOrTwoStep);
+//  d_oneOrTwoStep = 2;
+//  ps->get("OneOrTwoStep",     d_oneOrTwoStep);
 
   ps->getWithDefault("include_rotation", d_includeRotation, false);
 
@@ -133,22 +130,22 @@ SpecifiedBodyContact::SpecifiedBodyContact(const ProcessorGroup* myworld,
   }
 }
 
-SpecifiedBodyContact::~SpecifiedBodyContact()
+SpecifiedBodyFrictionContact::~SpecifiedBodyFrictionContact()
 {
 }
 
-void SpecifiedBodyContact::outputProblemSpec(ProblemSpecP& ps)
+void SpecifiedBodyFrictionContact::outputProblemSpec(ProblemSpecP& ps)
 {
   ProblemSpecP contact_ps = ps->appendChild("contact");
   contact_ps->appendElement("type","specified");
-  contact_ps->appendElement("filename",d_filename);
-  contact_ps->appendElement("direction",d_direction);
-  contact_ps->appendElement("master_material",d_material);
-  contact_ps->appendElement("stop_time",d_stop_time);
+  contact_ps->appendElement("filename",           d_filename);
+  contact_ps->appendElement("direction",          d_direction);
+  contact_ps->appendElement("master_material",    d_material);
+  contact_ps->appendElement("stop_time",          d_stop_time);
+  contact_ps->appendElement("mu",                 d_mu);
   contact_ps->appendElement("velocity_after_stop",d_vel_after_stop);
-  contact_ps->appendElement("volume_constraint",d_vol_const);
-  contact_ps->appendElement("OneOrTwoStep",     d_oneOrTwoStep);
-  contact_ps->appendElement("include_rotation", d_includeRotation);
+//  contact_ps->appendElement("OneOrTwoStep",     d_oneOrTwoStep);
+  contact_ps->appendElement("include_rotation",   d_includeRotation);
 
   d_matls.outputProblemSpec(contact_ps);
 
@@ -159,7 +156,7 @@ void SpecifiedBodyContact::outputProblemSpec(ProblemSpecP& ps)
     DIR *check = opendir(udaDir.c_str());
     if ( check == nullptr){
       ostringstream warn;
-      warn << "ERROR:SpecifiedBodyContact The main uda directory does not exist.";
+      warn << "ERROR:SpecifiedBodyFrictionContact The main uda directory does not exist.";
       throw ProblemSetupException(warn.str(), __FILE__, __LINE__);
     }
     closedir(check);
@@ -197,14 +194,12 @@ void SpecifiedBodyContact::outputProblemSpec(ProblemSpecP& ps)
 }
 
 // apply boundary conditions to interpolated velocity v^k
-void SpecifiedBodyContact::exMomInterpolated(const ProcessorGroup*,
+void SpecifiedBodyFrictionContact::exMomInterpolated(const ProcessorGroup*,
                                              const PatchSubset* patches,
                                              const MaterialSubset* matls,
                                              DataWarehouse* old_dw,
                                              DataWarehouse* new_dw)
 {
- cerr << "exMomInterpolated is currently a no-op for SpecifiedBodyContact" 
-      << endl;
 #if 0
  if(d_oneOrTwoStep==2){
   simTime_vartype simTime;
@@ -288,7 +283,7 @@ void SpecifiedBodyContact::exMomInterpolated(const ProcessorGroup*,
 }
 
 // apply boundary conditions to the interpolated velocity v^k+1
-void SpecifiedBodyContact::exMomIntegrated(const ProcessorGroup*,
+void SpecifiedBodyFrictionContact::exMomIntegrated(const ProcessorGroup*,
                                        const PatchSubset* patches,
                                        const MaterialSubset* matls,
                                        DataWarehouse* old_dw,
@@ -306,32 +301,37 @@ void SpecifiedBodyContact::exMomIntegrated(const ProcessorGroup*,
   std::vector<constNCVariable<Vector> > gvelocity(numMatls);
   std::vector<constNCVariable<Vector> > ginternalForce(numMatls);
   std::vector<constNCVariable<double> > gvolume(numMatls);
-  constNCVariable<Vector>               gsurfnorm;
+  std::vector<constNCVariable<double> > gmatlprominence(numMatls);    
 
   for(int p=0;p<patches->size();p++){
     const Patch* patch = patches->get(p);
 
-    Vector dx = patch->dCell();
-    double cell_vol = dx.x()*dx.y()*dx.z();
+//    Vector dx = patch->dCell();
+//    double cell_vol = dx.x()*dx.y()*dx.z();
     constNCVariable<double> NC_CCweight;
-    old_dw->get(NC_CCweight,         lb->NC_CCweightLabel,  0, patch, gnone, 0);
+    constNCVariable<int>    alphaMaterial;
+    constNCVariable<Vector> normAlphaToBeta;
+    old_dw->get(NC_CCweight,       lb->NC_CCweightLabel,     0,patch, gnone, 0);
+    new_dw->get(alphaMaterial,     lb->gAlphaMaterialLabel,  0,patch, gnone, 0);
+    new_dw->get(normAlphaToBeta,   lb->gNormAlphaToBetaLabel,0,patch, gnone, 0);
 
     for(int m=0;m<matls->size();m++){
      int dwi = matls->get(m);
-     new_dw->get(gmass[m],          lb->gMassLabel,         dwi,patch,gnone,0);
-     new_dw->get(ginternalForce[m], lb->gInternalForceLabel,dwi,patch,gnone,0);
-     new_dw->get(gvolume[m],        lb->gVolumeLabel,       dwi,patch,gnone,0);
+     new_dw->get(gmass[m],          lb->gMassLabel,         dwi,patch,gnone, 0);
+     new_dw->get(ginternalForce[m], lb->gInternalForceLabel,dwi,patch,gnone, 0);
+     new_dw->get(gvolume[m],        lb->gVolumeLabel,       dwi,patch,gnone, 0);
+     new_dw->get(gmatlprominence[m],lb->gMatlProminenceLabel,
+                                                            dwi,patch,gnone, 0);
      new_dw->getModifiable(gvelocity_star[m], lb->gVelocityStarLabel,dwi,patch);
     }
-
-    // Compute the normals for the rigid material
-    if(d_NormalOnly){
-      new_dw->get(gsurfnorm, lb->gSurfNormLabel, d_material, patch, gnone, 0);
-    } // if(d_NormalOnly)
 
     delt_vartype delT;
     old_dw->get(delT, lb->delTLabel, getLevel(patches));
     
+    // rigid_velocity just means that the master_material's initial velocity
+    // remains constant through the simulation, until d_stop_time is reached
+    // If the velocity comes from a profile specified in a file, or after
+    // d_stop_time, rigid_velocity is false
     bool  rigid_velocity = true;
     Vector requested_velocity(0.0, 0.0, 0.0);
     Vector requested_omega(0.0, 0.0, 0.0);
@@ -354,61 +354,46 @@ void SpecifiedBodyContact::exMomIntegrated(const ProcessorGroup*,
     for(NodeIterator iter = patch->getNodeIterator(); !iter.done();iter++){
       IntVector c = *iter; 
       
-      // Determine nodal volume
-      double totalNodalVol=0.0;
-      for(int  n = 0; n < numMatls; n++){
-        totalNodalVol+=gvolume[n][c]*8.0*NC_CCweight[c];
-      }
+      int alpha=alphaMaterial[c];
+      if(alpha>=0){  // Only work on nodes where alpha!=-99
+        Point NodePos = patch->getNodePosition(c);
+        Vector r = NodePos - requested_origin.asPoint();
+        Vector rigid_vel = Cross(requested_omega,r) + requested_velocity;
+        if(rigid_velocity) {
+          rigid_vel = gvelocity_star[d_material][c];
+        }
 
-      Point NodePos = patch->getNodePosition(c);
-      Vector r = NodePos - requested_origin.asPoint();
-      Vector rigid_vel = Cross(requested_omega,r) + requested_velocity;
-      if(rigid_velocity) {
-        rigid_vel = gvelocity_star[d_material][c];
-      }
-
-      for(int  n = 0; n < numMatls; n++){
-//          if(n==d_material){
-//             continue;
-//          }
-        if(!d_matls.requested(n)) continue;
-        Vector new_vel(gvelocity_star[n][c]);
-        if(d_NormalOnly){
-          Vector normal = gsurfnorm[c];
-          double normalDeltaVel = Dot(normal,(gvelocity_star[n][c]-rigid_vel));
-          if(normalDeltaVel < 0.0){
-            Vector normal_normaldV = normal*normalDeltaVel;
-            new_vel = gvelocity_star[n][c] - normal_normaldV;
-          }
-        } else{
+        for(int  n = 0; n < numMatls; n++){
+          if(!d_matls.requested(n)) continue;
+          Vector new_vel(gvelocity_star[n][c]);
           new_vel = gvelocity_star[n][c];
           if(n==d_material || d_direction[0]) new_vel.x( rigid_vel.x() );
           if(n==d_material || d_direction[1]) new_vel.y( rigid_vel.y() );
           if(n==d_material || d_direction[2]) new_vel.z( rigid_vel.z() );
-        }
 
-        if (!compare(gmass[d_material][c], 0.)
-        && (totalNodalVol/cell_vol) > d_vol_const){
-          Vector old_vel = gvelocity_star[n][c];
-          gvelocity_star[n][c] =  new_vel;
-          //reaction_force += gmass[n][c]*(new_vel-old_vel)/delT;
-          reaction_force  -= ginternalForce[n][c];
-          reaction_torque += Cross(r,gmass[n][c]*(new_vel-old_vel)/delT);
-        }  // if
-      }    // for matls
+          if (!compare(gmass[d_material][c], 0.)) {
+            Vector old_vel = gvelocity_star[n][c];
+            gvelocity_star[n][c] =  new_vel;
+            //reaction_force += gmass[n][c]*(new_vel-old_vel)/delT;
+            reaction_force  -= ginternalForce[n][c];
+            reaction_torque += Cross(r,gmass[n][c]*(new_vel-old_vel)/delT);
+          }  // if
+        }    // for matls
+      }
     }      // for Node Iterator
     new_dw->put(sumvec_vartype(reaction_force),  lb->RigidReactionForceLabel);
     new_dw->put(sumvec_vartype(reaction_torque), lb->RigidReactionTorqueLabel);
   } // loop over patches
 }
 
-void SpecifiedBodyContact::addComputesAndRequiresInterpolated(SchedulerP & sched,
-                                             const PatchSet* patches,
-                                             const MaterialSet* ms) 
+void SpecifiedBodyFrictionContact::addComputesAndRequiresInterpolated(
+                                                             SchedulerP & sched,
+                                                       const PatchSet* patches,
+                                                       const MaterialSet* ms) 
 {
 #if 0
-  Task * t = scinew Task("SpecifiedBodyContact::exMomInterpolated",
-                      this, &SpecifiedBodyContact::exMomInterpolated);
+  Task * t = scinew Task("SpecifiedBodyFrictionContact::exMomInterpolated",
+                      this, &SpecifiedBodyFrictionContact::exMomInterpolated);
   
   const MaterialSubset* mss = ms->getUnion();
   t->requires(Task::OldDW, lb->simulationTimeLabel);
@@ -420,12 +405,13 @@ void SpecifiedBodyContact::addComputesAndRequiresInterpolated(SchedulerP & sched
 #endif
 }
 
-void SpecifiedBodyContact::addComputesAndRequiresIntegrated(SchedulerP & sched,
-                                             const PatchSet* patches,
-                                             const MaterialSet* ms) 
+void SpecifiedBodyFrictionContact::addComputesAndRequiresIntegrated(
+                                                             SchedulerP & sched,
+                                                       const PatchSet* patches,
+                                                       const MaterialSet* ms) 
 {
-  Task * t = scinew Task("SpecifiedBodyContact::exMomIntegrated", 
-                      this, &SpecifiedBodyContact::exMomIntegrated);
+  Task * t = scinew Task("SpecifiedBodyFrictionContact::exMomIntegrated", 
+                      this, &SpecifiedBodyFrictionContact::exMomIntegrated);
 
   MaterialSubset* z_matl = scinew MaterialSubset();
   z_matl->add(0);
@@ -433,15 +419,14 @@ void SpecifiedBodyContact::addComputesAndRequiresIntegrated(SchedulerP & sched,
   
   const MaterialSubset* mss = ms->getUnion();
   t->requires(Task::OldDW, lb->simulationTimeLabel);
-  t->requires(Task::OldDW, lb->delTLabel);    
-  t->requires(Task::NewDW, lb->gMassLabel,             Ghost::None);
-  t->requires(Task::NewDW, lb->gInternalForceLabel,    Ghost::None);
-  t->requires(Task::NewDW, lb->gVolumeLabel,           Ghost::None);
-  t->requires(Task::OldDW, lb->NC_CCweightLabel,z_matl,Ghost::None);
-
-  if(d_NormalOnly){
-   t->requires(Task::NewDW, lb->gSurfNormLabel,         Ghost::None);
-  }
+  t->requires(Task::OldDW, lb->delTLabel);
+  t->requires(Task::NewDW, lb->gMassLabel,                    Ghost::None);
+  t->requires(Task::NewDW, lb->gInternalForceLabel,           Ghost::None);
+  t->requires(Task::NewDW, lb->gVolumeLabel,                  Ghost::None);
+  t->requires(Task::NewDW, lb->gMatlProminenceLabel,          Ghost::None);
+  t->requires(Task::NewDW, lb->gAlphaMaterialLabel,           Ghost::None);
+  t->requires(Task::OldDW, lb->NC_CCweightLabel,      z_matl, Ghost::None);
+  t->requires(Task::NewDW, lb->gNormAlphaToBetaLabel, z_matl, Ghost::None);
 
   t->modifies(             lb->gVelocityStarLabel,   mss);
   t->computes(lb->RigidReactionForceLabel);
@@ -455,8 +440,8 @@ void SpecifiedBodyContact::addComputesAndRequiresIntegrated(SchedulerP & sched,
 
 // find velocity from table of values
 Vector
-SpecifiedBodyContact::findValFromProfile(double t, 
-                                 vector<pair<double, Vector> > profile) const
+SpecifiedBodyFrictionContact::findValFromProfile(double t, 
+                                         vector<pair<double, Vector> > profile) const
 {
   int smin = 0;
   int smax = (int)(profile.size())-1;
@@ -490,4 +475,3 @@ SpecifiedBodyContact::findValFromProfile(double t,
       return Vector(vx,vy,vz);
     }
 }
-
